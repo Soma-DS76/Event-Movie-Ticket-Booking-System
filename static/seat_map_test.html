@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Live Seat Map Test</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 2rem auto; max-width: 900px; padding: 0 1rem; }
+    form { display: flex; flex-wrap: wrap; gap: .75rem; }
+    input { flex: 1 1 240px; padding: .6rem; }
+    button { padding: .6rem 1rem; }
+    #status { margin: 1rem 0; }
+    #map { display: grid; gap: .5rem; }
+    .row { align-items: center; display: flex; gap: .5rem; }
+    .row-label { width: 1.5rem; }
+    .seat { border: 0; border-radius: 4px; color: #fff; min-width: 3rem; padding: .5rem; }
+    .Available { background: #26834a; }
+    .Locked { background: #d78a00; }
+    .Yours { background: #1769aa; }
+    .Booked, .Unavailable { background: #666; }
+    #log { white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>Live Seat Map Test</h1>
+  <form id="connect-form">
+    <input id="show-id" type="number" min="1" placeholder="Show ID" required>
+    <input id="token" type="password" placeholder="Access token" required>
+    <button type="submit">Connect</button>
+  </form>
+  <p id="status">Not connected</p>
+  <div id="map" aria-live="polite"></div>
+  <pre id="log"></pre>
+  <script>
+    const form = document.getElementById("connect-form");
+    const map = document.getElementById("map");
+    const status = document.getElementById("status");
+    const log = document.getElementById("log");
+    let socket;
+
+    function render(seats) {
+      map.replaceChildren();
+      const rows = new Map();
+      seats.forEach((seat) => {
+        if (!rows.has(seat.row_label)) rows.set(seat.row_label, []);
+        rows.get(seat.row_label).push(seat);
+      });
+      [...rows.keys()].sort().forEach((label) => {
+        const row = document.createElement("div");
+        row.className = "row";
+        const rowLabel = document.createElement("strong");
+        rowLabel.className = "row-label";
+        rowLabel.textContent = label;
+        row.appendChild(rowLabel);
+        rows.get(label).forEach((seat) => row.appendChild(makeSeat(seat)));
+        map.appendChild(row);
+      });
+    }
+
+    function makeSeat(seat) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = `seat ${seat.status}`;
+      button.dataset.seatId = seat.seat_id;
+      button.textContent = `${seat.row_label}${seat.seat_number}`;
+      button.title = `${seat.category} - ${seat.status} - Rs. ${seat.price}`;
+      return button;
+    }
+
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      if (socket) socket.close();
+      const showId = document.getElementById("show-id").value;
+      const token = document.getElementById("token").value;
+      const scheme = location.protocol === "https:" ? "wss:" : "ws:";
+      socket = new WebSocket(`${scheme}//${location.host}/ws/shows/${showId}/seats?token=${encodeURIComponent(token)}`);
+      status.textContent = "Connecting...";
+      socket.onopen = () => { status.textContent = "Connected"; };
+      socket.onclose = () => { status.textContent = "Disconnected"; };
+      socket.onerror = () => { status.textContent = "Connection error"; };
+      socket.onmessage = ({ data }) => {
+        const message = JSON.parse(data);
+        if (message.type === "seat_map") render(message.seats);
+        if (message.type === "seat_update") {
+          const button = map.querySelector(`[data-seat-id="${message.seat_id}"]`);
+          if (button) {
+            button.className = `seat ${message.status}`;
+            button.title = `${button.textContent} - ${message.status}`;
+          }
+        }
+        if (message.type === "show_cancelled") status.textContent = message.message;
+        log.textContent = `${JSON.stringify(message)}\n${log.textContent}`.slice(0, 4000);
+      };
+    });
+  </script>
+</body>
+</html>
